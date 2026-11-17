@@ -4,6 +4,8 @@ import type {
 } from './types';
 import { isAnswer, isConcept } from './types';
 import { alpha } from './theme';
+import { ForceSim } from './force';
+import type { SimLink, SimNode } from './force';
 
 export interface FilterState {
   badges: Set<string>;
@@ -39,6 +41,15 @@ export class GraphChart {
   } | null = null;
   private unfocusTimer = 0;
   private introDone = false;
+  /** 力导向模拟：节点位置的唯一事实来源，ECharts 只负责渲染 */
+  private sim: ForceSim | null = null;
+  private simById = new Map<string, SimNode>();
+  private nodeOpts: any[] = [];
+  private linkOpts: any[] = [];
+  private prevVis: Set<string> | null = null;
+  private fitOnSettle = false;
+  private dragMoved = 0;
+  private suppressClickUntil = 0;
 
   constructor(
     dom: HTMLElement,
@@ -47,10 +58,26 @@ export class GraphChart {
   ) {
     this.chart = echarts.init(dom, undefined, { renderer: 'canvas' });
     this.chart.on('click', (p: any) => {
+      // 拖拽松手后同一拍内的 click 不触发详情打开
+      if (Date.now() < this.suppressClickUntil) return;
       if (p.dataType === 'node' && p.data?.id) {
         this.onPick(p.data.id);
       } else if (p.dataType === 'edge' && p.data?.raw?.type === 'dispute') {
         this.onDispute(p.data.raw.source, p.data.raw.target);
+      }
+    });
+    // 自研拖拽：按住节点即钉住并加热模拟，周围节点被真实挤开
+    this.chart.on('mousedown', (p: any) => {
+      if (p.dataType === 'node' && p.data?.id) this.beginDrag(p.data.id, p.event);
+    });
+    // 双击释放钉住的节点，让它回到力学系统中
+    this.chart.on('dblclick', (p: any) => {
+      if (p.dataType !== 'node' || !p.data?.id) return;
+      const n = this.simById.get(p.data.id);
+      if (n && n.fx != null && p.data.kind !== 'question') {
+        n.fx = null;
+        n.fy = null;
+        this.sim?.reheat(0.4);
       }
     });
     // v2 Focus+Context：hover 时用后端预计算的二阶邻域做分级高亮
@@ -268,6 +295,16 @@ export class GraphChart {
       }
     }
 
+    // 力学模拟是位置的唯一事实来源：重绘时沿用上次的物理位置，
+    // 主题/筛选切换不会把节点瞬移回后端预计算坐标
+    for (const o of nodes) {
+      const s = this.simById.get(o.id);
+      if (s) { o.x = s.x; o.y = s.y; }
+      o.cursor = 'grab';
+    }
+    this.nodeOpts = nodes;
+    this.linkOpts = links;
+
     // 筛选/主题复用同一份预计算坐标：保留用户当前缩放与平移，避免视角被重置
     const prev = ((this.chart.getOption() as any)?.series?.[0] ?? null) as any;
     const keepView = !intro && prev && prev.zoom != null
@@ -293,11 +330,11 @@ export class GraphChart {
       },
       series: [{
         type: 'graph',
-        // 布局由后端预计算（x/y + 碰撞松弛），前端只负责绘制：
-        // 筛选、主题、hover 都不会改变节点位置，空间记忆保持稳定。
+        // 布局由前端力导向模拟驱动（force.ts）：节点持续受力，
+        // 拖拽/筛选/换题都会真实地加热重排，而非一次性静态排版。
         layout: 'none',
         roam: true,
-        draggable: true,
+        draggable: false,   // 拖拽由自研 beginDrag 接管，避免双份处理
         ...keepView,
         data: nodes,
         links,
@@ -327,12 +364,153 @@ export class GraphChart {
       links: links.map((l) => ({ ...l.lineStyle })),
     };
 
-    // 坐标固定，渲染后贴合一次视口即可；筛选与主题切换不再触发重排
+    // 渲染后贴合一次视口；力学稳定后再贴合一次，补偿 settle 漂移
     window.clearTimeout(this.fitTimer);
     if (intro) {
       this.fitTimer = window.setTimeout(() => this.fitToView(), 60);
       this.playIntro();
     }
+    this.buildSim(intro);
+  }
+
+  /**
+   * 以当前可见性重建力学系统。
+   * 换题时从初始坐标大幅加热（intro 爆发式展开），
+   * 筛选可见性变化时轻微加热让可见节点重新散开，
+   * 纯主题切换只给一点余温，几乎不动。
+   */
+  private buildSim(intro: boolean): void {
+    const q = this.q;
+    this.sim?.stop();
+    const visIds = new Set(
+      q.nodes.filter(isAnswer).filter((a) => this.visible(a)).map((a) => a.id),
+    );
+
+    const nodes: SimNode[] = [];
+    for (const o of this.nodeOpts) {
+      let n = this.simById.get(o.id);
+      if (!n) {
+        const jx = intro ? (Math.random() - 0.5) * 70 : 0;
+        const jy = intro ? (Math.random() - 0.5) * 70 : 0;
+        n = {
+          id: o.id,
+          x: o.x + jx, y: o.y + jy,
+          vx: 0, vy: 0,
+          fx: null, fy: null,
+          radius: (typeof o.symbolSize === 'number' ? o.symbolSize : 16) / 2,
+          active: true,
+        };
+        this.simById.set(o.id, n);
+      }
+      n.radius = (typeof o.symbolSize === 'number' ? o.symbolSize : 16) / 2;
+      // 中心问题始终钉在布局原点，作为全图的引力锚
+      if (o.kind === 'question' && n.fx == null) { n.fx = o.x; n.fy = o.y; }
+      n.active = o.kind !== 'answer' || visIds.has(o.id);
+      nodes.push(n);
+    }
+
+    const links: SimLink[] = [];
+    for (const l of this.linkOpts) {
+      const a = this.simById.get(l.source);
+      const b = this.simById.get(l.target);
+      if (!a || !b) continue;
+      const raw = l.raw;
+      let distance = 190, strength = 0.05;
+      if (!raw) { distance = 260; strength = 0.018; }            // 问题 → 簇代表
+      else if (raw.type === 'dispute') { distance = 350; strength = 0.008; }
+      else if (raw.type === 'concept') { distance = 125; strength = 0.05; }
+      else if (raw.etier === 'strong') { distance = 150; strength = 0.11; }
+      else if (raw.etier === 'mid') { distance = 195; strength = 0.06; }
+      else if (raw.etier === 'weak') { distance = 235; strength = 0.02; }
+      links.push({ source: a, target: b, distance, strength });
+    }
+
+    const visChanged = !this.prevVis
+      || visIds.size !== this.prevVis.size
+      || [...visIds].some((id) => !this.prevVis!.has(id));
+    this.prevVis = visIds;
+    this.fitOnSettle = intro;
+
+    this.sim = new ForceSim(nodes, links, () => this.simTick(), () => {
+      // 冷却后恢复动画开关，并补偿性贴合一次视口
+      this.chart.setOption({
+        animation: true,
+        animationDuration: 380,
+        animationEasing: 'cubicOut',
+        animationDurationUpdate: 380,
+        animationEasingUpdate: 'cubicInOut',
+      });
+      if (this.fitOnSettle) {
+        this.fitOnSettle = false;
+        this.fitToView();
+      }
+    });
+
+    if (intro) this.sim.reheat(0.9);
+    else if (visChanged) this.sim.reheat(0.32);
+    else this.sim.reheat(0.12);
+  }
+
+  /** 每帧把物理位置写回 ECharts（全量 data 按索引合并，样式不动） */
+  private simTick(): void {
+    const dom = this.chart.getDom();
+    if (!dom.clientWidth || !dom.clientHeight) return;   // 列表视图下不渲染
+    if (!this.sim) return;
+    for (const o of this.nodeOpts) {
+      const n = this.simById.get(o.id);
+      if (!n) continue;
+      o.x = n.x;
+      o.y = n.y;
+    }
+    this.chart.setOption({
+      animation: false,
+      series: [{ data: this.nodeOpts }],
+    });
+  }
+
+  /** 自研节点拖拽：按住即钉住、局部加热，松手保持位置，拖动不触发点击 */
+  private beginDrag(id: string, ev: any): void {
+    const n = this.simById.get(id);
+    if (!n || !ev) return;
+    this.dragMoved = 0;
+    const dom = this.chart.getDom();
+    dom.style.cursor = 'grabbing';
+    this.chart.setOption({ series: [{ roam: false }] });
+
+    // 记录指针与节点中心的偏移，拖动时节点不跳变到指针正下方
+    let offX = 0, offY = 0;
+    try {
+      const pt = this.chart.convertFromPixel(
+        { seriesIndex: 0 }, [ev.offsetX ?? 0, ev.offsetY ?? 0]) as any;
+      if (pt && isFinite(pt[0]) && isFinite(pt[1])) {
+        offX = n.x - pt[0];
+        offY = n.y - pt[1];
+      }
+    } catch { /* 转换失败就按节点中心拖 */ }
+
+    const move = (e: MouseEvent) => {
+      const rect = dom.getBoundingClientRect();
+      let pt: number[] | null = null;
+      try {
+        pt = this.chart.convertFromPixel({ seriesIndex: 0 },
+          [e.clientX - rect.left, e.clientY - rect.top]) as any;
+      } catch { return; }
+      if (!pt || !isFinite(pt[0]) || !isFinite(pt[1])) return;
+      this.dragMoved++;
+      n.fx = pt[0] + offX;
+      n.fy = pt[1] + offY;
+      this.sim?.reheat(0.35);
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      dom.style.cursor = '';
+      this.chart.setOption({ series: [{ roam: true }] });
+      if (this.dragMoved > 3) this.suppressClickUntil = Date.now() + 250;
+      this.sim?.reheat(0.2);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
   }
 
   private tooltip(p: any): string {
@@ -361,7 +539,8 @@ export class GraphChart {
       + `<br/>${a.upvotes} 赞 · 质量分 ${a.q.toFixed(2)}`
       + (a.hidden_gem ? ` · <b>被低估</b>` : '')
       + `<br/><span style="${muted}">${STANCE_CN[a.stance]}（置信 ${a.stance_conf}）</span>`
-      + `<br/><br/><span style="${muted}">${a.gist}</span>`;
+      + `<br/><br/><span style="${muted}">${a.gist}</span>`
+      + `<br/><br/><span style="${muted}">拖拽可固定位置 · 双击释放</span>`;
   }
 
   /** 入场：节点由中心扩散 + 一次涟漪脉冲 */
