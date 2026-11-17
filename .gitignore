@@ -1,0 +1,12 @@
+# 依赖与构建产物
+web/node_modules/
+web/dist/
+
+# Python 缓存
+__pycache__/
+*.pyc
+.llm_cache/
+
+# 系统文件
+.DS_Store
+Thumbs.db

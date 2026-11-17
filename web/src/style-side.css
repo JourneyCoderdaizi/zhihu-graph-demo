@@ -1,0 +1,172 @@
+/* --- 侧栏：卡片式，去边框、大圆角、充足留白 --- */
+aside#side {
+  width: 288px;
+  flex-shrink: 0;
+  background: var(--side-bg);
+  padding: 16px 14px 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: slide-right .5s cubic-bezier(.22,1,.36,1) both;
+  animation-delay: .05s;
+  transition: background-color .34s ease;
+}
+
+/* 卡片容器：靠色差 + 弱阴影分层，无 border */
+.s-card,
+.theme-card {
+  background: var(--card-bg);
+  border-radius: var(--radius-card);
+  box-shadow: var(--card-shadow);
+  padding: 20px;
+  transition: background-color .34s ease, box-shadow .3s ease;
+}
+.s-card:hover { box-shadow: var(--card-shadow-hover); }
+
+.theme-card { padding: 16px; display: grid; place-items: center; }
+
+.s-card h3 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: .2px;
+  margin-bottom: 14px;
+}
+
+/* === 主题切换：放大居中的三段胶囊 === */
+.theme-switch {
+  display: flex;
+  gap: 4px;
+  background: var(--chip-bg);
+  border-radius: var(--radius-pill);
+  padding: 4px;
+  transition: background-color .34s ease;
+}
+.theme-switch button {
+  width: 56px; height: 38px;
+  border: 0;
+  background: transparent;
+  color: var(--chip-text);
+  cursor: pointer;
+  display: grid; place-items: center;
+  border-radius: var(--radius-pill);
+  transition: color .25s, background-color .3s;
+}
+.theme-switch button svg { width: 19px; height: 19px; }
+.theme-switch button[aria-pressed='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* === 模块 A：身份属性 —— 横向胶囊切换组 === */
+.pill-group { display: flex; flex-wrap: wrap; gap: 7px; }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--chip-bg);
+  color: var(--chip-text);
+  font-size: 12.5px;
+  font-weight: 400;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color .26s, color .26s, transform .16s;
+}
+.pill:hover { transform: translateY(-1px); }
+.pill[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--accent-on);
+  font-weight: 600;
+}
+/* 数字弱化：缩小字号 + 降低不透明度 */
+.pill i {
+  font-style: normal;
+  font-size: 10.5px;
+  opacity: .62;
+  font-variant-numeric: tabular-nums;
+}
+
+/* === 模块 B：质量滤镜 —— 极简列表 + 线框图标 === */
+.q-row {
+  display: flex; align-items: center; gap: 11px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 0;
+  border-radius: var(--radius-row);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color .26s;
+}
+.q-row + .q-row { margin-top: 4px; }
+.q-row:hover { background: var(--chip-bg); }
+.q-row[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent); }
+.q-row[aria-pressed='true'] .q-ico { color: var(--accent); }
+.q-ico {
+  width: 18px; height: 18px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: color .26s;
+}
+.q-ico svg { width: 100%; height: 100%; }
+.q-row span { flex: 1; }
+
+/* === 模块 C：观点簇 —— 标签云 === */
+.tag-cloud { display: flex; flex-wrap: wrap; gap: 7px; }
+.tag-pill {
+  padding: 7px 13px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--chip-bg);
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color .26s, color .26s, opacity .26s, transform .16s;
+}
+.tag-pill:hover { transform: translateY(-1px); }
+.tag-pill[aria-pressed='false'] { opacity: .42; color: var(--text-muted); }
+.tag-pill .hash { color: var(--text-muted); margin-right: 3px; }
+.tag-pill b { font-weight: 400; }
+.tag-pill i {
+  font-style: normal; font-size: 10.5px; opacity: .55;
+  margin-left: 5px; font-variant-numeric: tabular-nums;
+}
+
+/* === 模块 D：被低估的回答 —— 纯留白列表，无分割线 === */
+.gem-list { display: flex; flex-direction: column; }
+.gem-item {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 11px 12px;
+  border: 0;
+  border-radius: var(--radius-row);
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  width: 100%;
+  transition: background-color .24s;
+}
+.gem-item:hover { background: var(--chip-bg); }
+.gem-item b {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gem-item span {
+  font-size: 11px; color: var(--text-muted);
+  font-variant-numeric: tabular-nums; flex-shrink: 0;
+}
+
+.empty-hint {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.75;
+  padding: 2px 2px 0;
+}
+

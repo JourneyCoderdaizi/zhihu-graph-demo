@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>知乎问答关系图谱 · 观点地图</title>
+</head>
+<body>
+  <div class="page-bg"></div>
+  <div class="page-noise"></div>
+
+  <div id="app">
+    <header>
+      <div class="brand">
+        <span class="brand-mark"><img id="brand-img" alt="刘看山" /></span>
+        <h1>知乎问答关系图谱<em> · 观点地图</em></h1>
+      </div>
+
+      <div class="toolbar">
+        <select class="q-select" id="q-select" aria-label="选择问题"></select>
+      </div>
+    </header>
+
+    <main>
+      <button id="side-toggle" aria-label="收起侧栏" aria-expanded="true" title="收起侧栏">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
+
+      <aside id="side">
+        <div class="theme-card">
+          <div class="theme-switch" id="theme-switch" role="group" aria-label="主题"></div>
+          <button class="settings-btn" id="settings-btn" title="大模型设置">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3.2"/>
+              <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.9 19.3a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.7 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.56 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1z"/>
+            </svg>
+          </button>
+        </div>
+
+        <section class="s-card">
+          <h3>身份属性</h3>
+          <div class="pill-group" id="f-badge"></div>
+        </section>
+
+        <section class="s-card">
+          <h3>质量滤镜</h3>
+          <div id="f-qual"></div>
+        </section>
+
+        <section class="s-card">
+          <h3>观点簇</h3>
+          <div class="tag-cloud" id="f-cluster"></div>
+        </section>
+
+        <section class="s-card">
+          <h3>被低估的回答</h3>
+          <div class="gem-list" id="gems"></div>
+        </section>
+      </aside>
+
+      <section id="center">
+        <div class="tabs" role="tablist">
+          <button class="tab" data-view="graph" role="tab" aria-selected="true">图谱视图</button>
+          <button class="tab" data-view="list" role="tab" aria-selected="false">列表视图</button>
+        </div>
+        <div id="chart"></div>
+        <div id="listview"></div>
+      </section>
+
+      <aside id="drawer">
+        <div class="drawer-inner" id="drawer-inner"></div>
+      </aside>
+    </main>
+  </div>
+
+  <div id="settings-mask" hidden>
+    <div class="settings-panel" role="dialog" aria-modal="true" aria-label="大模型设置">
+      <header>
+        <h2>大模型设置</h2>
+        <button class="drawer-close" id="settings-close" aria-label="关闭">×</button>
+      </header>
+      <p class="settings-hint" id="settings-status">—</p>
+
+      <label>服务地址 Base URL
+        <input id="cfg-base" type="text" placeholder="https://api.deepseek.com/v1" autocomplete="off" />
+      </label>
+      <label>API Key
+        <input id="cfg-key" type="password" placeholder="sk-..." autocomplete="off" />
+      </label>
+      <label>对话模型
+        <input id="cfg-model" type="text" placeholder="deepseek-chat" autocomplete="off" />
+      </label>
+      <label>Embedding 模型<span class="opt">用于语义向量化</span>
+        <input id="cfg-emb" type="text" placeholder="text-embedding-3-small" autocomplete="off" />
+      </label>
+
+      <div class="settings-presets">
+        <span>快速填充</span>
+        <button class="chip-btn" data-preset="deepseek">DeepSeek</button>
+        <button class="chip-btn" data-preset="qwen">通义千问</button>
+        <button class="chip-btn" data-preset="openai">OpenAI</button>
+        <button class="chip-btn" data-preset="ollama">本地 Ollama</button>
+      </div>
+
+      <div class="settings-caps" id="settings-caps"></div>
+
+      <footer>
+        <button class="btn-outline" id="cfg-clear">清除</button>
+        <button class="btn-primary" id="cfg-save">保存配置</button>
+      </footer>
+      <p class="settings-note">配置保存在本机浏览器，不会上传。保存后复制生成的环境变量到终端，
+        重新运行 <code>python upgrade.py</code> 与 <code>python llm_layer.py</code> 即可启用。</p>
+      <pre class="settings-env" id="cfg-env" hidden></pre>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
