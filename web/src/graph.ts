@@ -40,10 +40,18 @@ export class GraphChart {
   private unfocusTimer = 0;
   private introDone = false;
 
-  constructor(dom: HTMLElement, private onPick: (id: string) => void) {
+  constructor(
+    dom: HTMLElement,
+    private onPick: (id: string) => void,
+    private onDispute: (a: string, b: string) => void,
+  ) {
     this.chart = echarts.init(dom, undefined, { renderer: 'canvas' });
     this.chart.on('click', (p: any) => {
-      if (p.dataType === 'node' && p.data?.id) this.onPick(p.data.id);
+      if (p.dataType === 'node' && p.data?.id) {
+        this.onPick(p.data.id);
+      } else if (p.dataType === 'edge' && p.data?.raw?.type === 'dispute') {
+        this.onDispute(p.data.raw.source, p.data.raw.target);
+      }
     });
     // v2 Focus+Context：hover 时用后端预计算的二阶邻域做分级高亮
     // Focus 防抖：鼠标快速扫过时不触发，避免高频重绘造成闪烁
@@ -62,10 +70,18 @@ export class GraphChart {
       // 离开也延迟，避免节点间移动时反复明暗跳动
       this.unfocusTimer = window.setTimeout(() => this.clearFocus(), FOCUS_LEAVE_MS);
     });
-    window.addEventListener('resize', () => {
-      this.chart.resize();
-      this.fitToView();
-    });
+    // 容器尺寸由侧栏/抽屉/视图切换共同影响；用 ResizeObserver 统一接管。
+    // 尺寸动画（侧栏 340ms）期间会连续触发，防抖到「最后一次变化后」再处理：
+    // 隐藏时量到 0 宽不处理，动画结束若节点被裁出画布才重新贴合视口，
+    // 用户手动缩放过的视角在容器变大时不会被重置。
+    let resizeTimer = 0;
+    new ResizeObserver(() => {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        this.resizeOnly();
+        this.fitIfCropped();
+      }, 140);
+    }).observe(dom);
   }
 
   clusterColor(i: number): string {
@@ -152,6 +168,7 @@ export class GraphChart {
         // L1 核心：最大实心圆 + 最大加粗字
         nodes.push({
           id: n.id, name: n.name, kind: 'question', raw: n, tier,
+          x: n.x, y: n.y,
           symbolSize: 60,
           itemStyle: { color: pal.l1, borderWidth: 0 },
           label: {
@@ -167,6 +184,7 @@ export class GraphChart {
         const base = tier === 2 ? 19 : 10;
         nodes.push({
           id: n.id, name: n.name, kind: 'answer', raw: n, tier,
+          x: n.x, y: n.y,
           symbolSize: base + n.q * (tier === 2 ? 25 : 12),
           itemStyle: {
             color: tierColor,
@@ -191,6 +209,7 @@ export class GraphChart {
       } else if (isConcept(n)) {
         nodes.push({
           id: n.id, name: n.name, kind: 'concept', raw: n, tier,
+          x: n.x, y: n.y,
           symbolSize: (tier === 2 ? 10 : 6) + n.share * 0.85,
           itemStyle: { color: tierColor, opacity: tier === 2 ? 0.88 : 0.42 },
           label: {
@@ -213,8 +232,8 @@ export class GraphChart {
         return {
           source: e.source, target: e.target, raw: e,
           lineStyle: {
-            color: pal.dispute, width: 1.5, type: 'dashed',
-            curveness: 0, opacity: live ? 0.72 : 0.04,
+            color: pal.dispute, width: 2.2, type: 'dashed',
+            curveness: 0, opacity: live ? 0.8 : 0.04,
           },
           z: 3,
         };
@@ -249,6 +268,12 @@ export class GraphChart {
       }
     }
 
+    // 筛选/主题复用同一份预计算坐标：保留用户当前缩放与平移，避免视角被重置
+    const prev = ((this.chart.getOption() as any)?.series?.[0] ?? null) as any;
+    const keepView = !intro && prev && prev.zoom != null
+      ? { zoom: prev.zoom, center: prev.center ?? undefined }
+      : {};
+
     this.chart.setOption({
       backgroundColor: 'transparent',
       animation: true,
@@ -268,19 +293,12 @@ export class GraphChart {
       },
       series: [{
         type: 'graph',
-        // 力导向：向心引力把边缘节点拉向中心，斥力与分级边长形成恒星系结构
-        layout: 'force',
+        // 布局由后端预计算（x/y + 碰撞松弛），前端只负责绘制：
+        // 筛选、主题、hover 都不会改变节点位置，空间记忆保持稳定。
+        layout: 'none',
         roam: true,
         draggable: true,
-        force: {
-          initLayout: 'circular',
-          // 斥力提供"碰撞体积"效果，边长分级形成中心紧实、边缘发散
-          repulsion: 120,
-          gravity: 0.16,
-          edgeLength: [40, 110],
-          friction: 0.16,
-          layoutAnimation: true,
-        },
+        ...keepView,
         data: nodes,
         links,
         // Focus & Dim：hover 时非相关元素降到 0.1，相关连线变亮加粗
@@ -300,11 +318,21 @@ export class GraphChart {
       }],
     }, true);
 
-    // 力导向需要时间收敛；收敛后固定坐标并贴合视口，避免持续漂移造成越界
-    window.clearTimeout(this.fitTimer);
-    this.fitTimer = window.setTimeout(() => this.fitToView(), intro ? 1900 : 1200);
+    // 记录无 Focus 时的基线样式：hover 结束只做透明度还原，绝不重建布局
+    this.baseStyles = {
+      nodes: Object.fromEntries(nodes.map((n) => [
+        n.id,
+        { itemStyle: { ...n.itemStyle }, label: { ...(n.label ?? {}) } },
+      ])),
+      links: links.map((l) => ({ ...l.lineStyle })),
+    };
 
-    if (intro) this.playIntro();
+    // 坐标固定，渲染后贴合一次视口即可；筛选与主题切换不再触发重排
+    window.clearTimeout(this.fitTimer);
+    if (intro) {
+      this.fitTimer = window.setTimeout(() => this.fitToView(), 60);
+      this.playIntro();
+    }
   }
 
   private tooltip(p: any): string {
@@ -314,7 +342,7 @@ export class GraphChart {
       const e = p.data?.raw;
       if (!e) return '';
       if (e.type === 'dispute') {
-        return `<b>争议边</b><br/><span style="${muted}">场景取值相反的一对回答</span><br/>对立度 ${e.opposition ?? '-'}`;
+        return `<b>争议边</b><br/><span style="${muted}">场景取值相反的一对回答</span><br/>对立度 ${e.opposition ?? '-'}<br/><span style="${muted}">点击查看正反对比</span>`;
       }
       if (e.type === 'concept') return `<span style="${muted}">概念关联</span>`;
       return `语义相似度 ${e.w}<br/><span style="${muted}">距离越近，观点越相似</span>`;
@@ -434,55 +462,109 @@ export class GraphChart {
     this.chart.dispatchAction({ type: 'highlight', seriesIndex: 0, dataIndex: idx });
   }
 
-  /** 冻结后按布局坐标直接解析 zoom/center，避免 graphRoam 相对倍率累乘失控 */
+  /**
+   * 把当前可见节点收进视口。
+   *
+   * 直接用 convertToPixel 实测「布局坐标 → 像素」的投影关系，再按比例反推 zoom，
+   * 并把包围盒像素中心反投回布局坐标作为 center —— 这样不依赖 ECharts 内部
+   * zoom 的基准倍率（graph 的 View 基准并非 1:1），也不会出现「算出来贴合、
+   * 实际上下被裁掉」的偏差。
+   */
   fitToView(): void {
     const dom = this.chart.getDom();
     const W = dom.clientWidth, H = dom.clientHeight;
     if (!W || !H) return;
-    const model: any = (this.chart as any).getModel?.();
-    const series = model?.getSeriesByIndex?.(0);
-    const graph = series?.getGraph?.();
-    if (!graph) return;
-
-    // 以布局坐标系为基准统计包围盒（含标签占位，按当前 zoom 折算回布局单位）
     const opt: any = this.chart.getOption();
-    const curZoom = opt?.series?.[0]?.zoom ?? 1;
-    let l = Infinity, r = -Infinity, t = Infinity, b = -Infinity;
-    graph.eachNode((node: any) => {
-      const lay = node.getLayout?.();
-      if (!lay) return;
-      const item = node.getModel?.();
-      const size = item?.get?.(['symbolSize']) ?? 20;
-      const rad = (typeof size === 'number' ? size : 20) / 2;
-      const show = item?.get?.(['label', 'show']);
-      const labW = show ? String(node.name ?? '').length * 11 + 16 : 0;
-      const labH = show ? 20 : 4;
-      // 节点半径与标签是屏幕像素量，换算到布局单位
-      const k = curZoom || 1;
-      l = Math.min(l, lay[0] - rad / k);
-      r = Math.max(r, lay[0] + (rad + labW) / k);
-      t = Math.min(t, lay[1] - (rad + labH) / k);
-      b = Math.max(b, lay[1] + (rad + labH) / k);
-    });
-    if (!isFinite(l)) return;
+    const data: any[] = opt?.series?.[0]?.data ?? [];
+    const zoomCur = opt?.series?.[0]?.zoom ?? 1;
+    if (!data.length) return;
 
-    const padX = 42, padY = 56;
-    const zoom = Math.min(
-      (W - padX * 2) / Math.max(r - l, 1),
-      (H - padY * 2) / Math.max(b - t, 1),
-    );
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const n of data) {
+      if (n.itemStyle?.opacity === 0.1) continue;   // 被筛掉的节点不参与取景
+      let px: number[] | null = null;
+      try {
+        px = this.chart.convertToPixel({ seriesIndex: 0 }, [n.x, n.y]) as any;
+      } catch {
+        return;
+      }
+      if (!px || !isFinite(px[0]) || !isFinite(px[1])) return;
+      minX = Math.min(minX, px[0]);
+      maxX = Math.max(maxX, px[0]);
+      minY = Math.min(minY, px[1]);
+      maxY = Math.max(maxY, px[1]);
+    }
+    if (!isFinite(minX)) return;
+
+    // 屏幕像素留白：节点半径 + 右侧/下方标签的占位
+    const padX = 76, padY = 58;
+    const availW = W - padX * 2, availH = H - padY * 2;
+    const spanX = Math.max(maxX - minX, 1), spanY = Math.max(maxY - minY, 1);
+    const ratio = Math.min(availW / spanX, availH / spanY);
+    const zoom = Math.min(Math.max(zoomCur * ratio, 0.15), 4);
     if (!isFinite(zoom) || zoom <= 0) return;
+
+    const mid = [(minX + maxX) / 2, (minY + maxY) / 2];
+    let center: number[] | null = null;
+    try {
+      center = this.chart.convertFromPixel({ seriesIndex: 0 }, mid as any) as any;
+    } catch {
+      center = null;
+    }
+    if (!center || !isFinite(center[0]) || !isFinite(center[1])) return;
+
     this.chart.setOption({
-      series: [{ zoom, center: [(l + r) / 2, (t + b) / 2] }],
+      series: [{ zoom, center }],
+      animationDurationUpdate: 220,
+      animationEasingUpdate: 'cubicOut',
     });
+  }
+
+  /** 尺寸变化只重算画布，不改变用户当前视角 */
+  private resizeOnly(): void {
+    const dom = this.chart.getDom();
+    if (!dom.clientWidth || !dom.clientHeight) return;
+    this.chart.resize();
+  }
+
+  /**
+   * 画布尺寸变化后只在「节点确实被裁出可视区」时重新贴合。
+   * 这样侧栏展开能救回被裁掉的节点，而单纯放大窗口不会打断用户的缩放。
+   */
+  private fitIfCropped(): void {
+    const dom = this.chart.getDom();
+    const W = dom.clientWidth, H = dom.clientHeight;
+    if (!W || !H) return;
+    const nodes: any[] = ((this.chart.getOption() as any)?.series?.[0]?.data ?? []);
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    try {
+      for (const n of nodes) {
+        if (n.itemStyle?.opacity === 0.1) continue;   // 被筛掉的节点不参与判定
+        const px = this.chart.convertToPixel({ seriesIndex: 0 }, [n.x, n.y]);
+        if (!px || !isFinite(px[0]) || !isFinite(px[1])) return;
+        const r = (typeof n.symbolSize === 'number' ? n.symbolSize : 20) / 2 + 10;
+        minX = Math.min(minX, px[0] - r);
+        maxX = Math.max(maxX, px[0] + r);
+        minY = Math.min(minY, px[1] - r);
+        maxY = Math.max(maxY, px[1] + r);
+      }
+    } catch {
+      return;
+    }
+    if (!isFinite(minX)) return;
+    // 允许少量出血，超出即视为被裁，重新贴合一次
+    const bleed = 24;
+    if (minX < -bleed || maxX > W + bleed || minY < -bleed || maxY > H + bleed) {
+      this.fitToView();
+    }
   }
 
   resize(): void {
-    this.chart.resize();
+    this.resizeOnly();
     this.fitToView();
   }
 
-  /** 供自动化校验使用：基于力导向实时坐标 */
+  /** 供自动化校验使用：基于固定布局坐标 */
   debugBounds(): { overflow: number; margins: Record<string, number>; nodes: number } {
     const dom = this.chart.getDom();
     const W = dom.clientWidth, H = dom.clientHeight;

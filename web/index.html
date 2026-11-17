@@ -66,6 +66,10 @@
           <button class="tab" data-view="list" role="tab" aria-selected="false">列表视图</button>
         </div>
         <div id="chart"></div>
+        <div id="graph-empty" class="graph-empty" hidden>
+          <p>当前筛选下没有可显示的回答</p>
+          <button class="btn-outline" id="graph-empty-reset">恢复全部筛选</button>
+        </div>
         <div id="listview"></div>
       </section>
 
@@ -110,8 +114,9 @@
         <button class="btn-outline" id="cfg-clear">清除</button>
         <button class="btn-primary" id="cfg-save">保存配置</button>
       </footer>
-      <p class="settings-note">配置保存在本机浏览器，不会上传。保存后复制生成的环境变量到终端，
-        重新运行 <code>python upgrade.py</code> 与 <code>python llm_layer.py</code> 即可启用。</p>
+      <p class="settings-note">当前页面是静态演示：填写 Key 不会改变已渲染的图谱。
+        配置保存在本机浏览器，保存后复制生成的环境变量到终端，
+        重新运行 <code>python upgrade.py</code> 与 <code>python llm_layer.py</code> 才会生效。</p>
       <pre class="settings-env" id="cfg-env" hidden></pre>
     </div>
   </div>

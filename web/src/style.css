@@ -344,6 +344,8 @@ aside#side {
   transition: background-color .26s, color .26s, transform .16s;
 }
 .pill:hover { transform: translateY(-1px); }
+.pill:disabled { opacity: .42; cursor: not-allowed; }
+.pill:disabled:hover { transform: none; }
 .pill[aria-pressed='true'] {
   background: var(--accent);
   color: var(--accent-on);
@@ -464,6 +466,23 @@ section#center { flex: 1; min-width: 0; display: flex; flex-direction: column; p
 }
 
 #chart { flex: 1; min-height: 0; }
+
+/* 图谱空状态：提示不拦截画布拖拽，只让按钮可点 */
+.graph-empty {
+  position: absolute;
+  inset: 43px 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  pointer-events: none;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  z-index: 2;
+}
+.graph-empty[hidden] { display: none; }
+.graph-empty .btn-outline { pointer-events: auto; }
 
 #listview { flex: 1; overflow-y: auto; padding: 13px 18px; display: none; }
 #listview.on { display: block; }

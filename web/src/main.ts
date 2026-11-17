@@ -30,6 +30,9 @@ const filters: FilterState = {
   hiddenClusters: new Set(),
 };
 
+/** 最近一次打开抽屉的时间：用于区分「点外部关闭」和「点条目打开新内容」 */
+let drawerOpenedAt = 0;
+
 /* ---------- 启动 ---------- */
 
 applyTheme(getMode(), false);
@@ -54,7 +57,7 @@ async function bootstrap(): Promise<void> {
     mascot.play('computer', '换个题目看看');
   });
 
-  chart = new GraphChart($('#chart'), openDrawer);
+  chart = new GraphChart($('#chart'), openDrawer, openDispute);
   mascot = new Mascot($('#center'));
 
   onThemeChange((resolved) => {
@@ -64,8 +67,9 @@ async function bootstrap(): Promise<void> {
   });
 
   buildTabs();
+  buildEmptyState();
   buildSideToggle();
-  initSettings(() => mascot.play('computer', '大模型配置已更新'));
+  initSettings(() => mascot.play('computer', '配置已保存（本地建图用）'));
   $<HTMLButtonElement>('#drawer-close-proxy')?.remove();
 
   load(data.questions[0].qid, true);
@@ -140,6 +144,7 @@ function load(qid: string, intro = false): void {
   buildSide();
   if ($('#listview').classList.contains('on')) renderList();
   closeDrawer();
+  updateEmptyState();
 }
 
 const answers = (): AnswerNode[] => cur.nodes.filter(isAnswer);
@@ -167,6 +172,10 @@ function buildSide(): void {
     const n = answers().filter((a) => a.badge === b).length;
     const el = btn('pill', `${BADGE_CN[b]}<i>${n}</i>`);
     el.setAttribute('aria-pressed', String(filters.badges.has(b)));
+    if (!n) {
+      el.disabled = true;
+      el.title = '本题没有该身份的回答';
+    }
     el.addEventListener('click', () => {
       filters.badges.has(b) ? filters.badges.delete(b) : filters.badges.add(b);
       el.setAttribute('aria-pressed', String(filters.badges.has(b)));
@@ -244,6 +253,7 @@ function row(cls: string, html: string): HTMLDivElement {
 function applyFilters(): void {
   chart.updateFilters(filters);
   if ($('#listview').classList.contains('on')) renderList();
+  updateEmptyState();
 }
 
 /* ---------- 侧栏收起 ---------- */
@@ -253,17 +263,16 @@ function buildSideToggle(): void {
   const main = document.querySelector('main')!;
   const KEY = 'zhihu-graph-side-collapsed';
 
-  const apply = (collapsed: boolean, animate = true) => {
+  const apply = (collapsed: boolean) => {
     main.classList.toggle('side-collapsed', collapsed);
     btn.setAttribute('aria-expanded', String(!collapsed));
     btn.setAttribute('aria-label', collapsed ? '展开侧栏' : '收起侧栏');
     btn.title = collapsed ? '展开侧栏' : '收起侧栏';
     localStorage.setItem(KEY, collapsed ? '1' : '0');
-    // 画布宽度变化后重新贴合视口
-    window.setTimeout(() => chart.resize(), animate ? 360 : 0);
+    // 尺寸交给 GraphChart 的 ResizeObserver 处理，避免与过渡动画抢时序
   };
 
-  apply(localStorage.getItem(KEY) === '1', false);
+  apply(localStorage.getItem(KEY) === '1');
   btn.addEventListener('click', () =>
     apply(!main.classList.contains('side-collapsed')));
 }
@@ -279,6 +288,7 @@ function buildTabs(): void {
       $('#chart').style.display = graphOn ? '' : 'none';
       $('#listview').classList.toggle('on', !graphOn);
       if (graphOn) chart.resize(); else renderList();
+      updateEmptyState();
     });
   });
 }
@@ -306,6 +316,29 @@ function renderList(): void {
   });
 }
 
+/* ---------- 空状态 ---------- */
+
+function visibleAnswerCount(): number {
+  return answers().filter((a) => chart.visible(a)).length;
+}
+
+function updateEmptyState(): void {
+  const graphOn = !$('#listview').classList.contains('on');
+  $('#graph-empty').hidden = !(graphOn && visibleAnswerCount() === 0);
+}
+
+function buildEmptyState(): void {
+  $('#graph-empty-reset').addEventListener('click', () => {
+    filters.badges.clear();
+    (['authority', 'normal', 'org'] as const).forEach((b) => filters.badges.add(b));
+    filters.qual.clear();
+    filters.hiddenClusters.clear();
+    buildSide();
+    applyFilters();
+    mascot.play('wave', '筛选已恢复');
+  });
+}
+
 /* ---------- 抽屉 ---------- */
 
 function openDrawer(id: string): void {
@@ -313,7 +346,7 @@ function openDrawer(id: string): void {
   if (!node) return;
   const dw = $('#drawer-inner');
   $('#drawer').classList.add('open');
-  window.setTimeout(() => chart.resize(), 340);
+  drawerOpenedAt = Date.now();
 
   const close = '<button class="drawer-close" id="dw-close" aria-label="关闭">×</button>';
 
@@ -378,6 +411,41 @@ function openDrawer(id: string): void {
   });
 }
 
+function openDispute(aId: string, bId: string): void {
+  const a = cur.nodes.find((n) => n.id === aId);
+  const b = cur.nodes.find((n) => n.id === bId);
+  if (!a || !b || !isAnswer(a) || !isAnswer(b)) return;
+
+  const edge = cur.edges.find((e) => e.type === 'dispute'
+    && ((e.source === aId && e.target === bId) || (e.source === bId && e.target === aId)));
+
+  $('#drawer').classList.add('open');
+  drawerOpenedAt = Date.now();
+  $('#drawer-inner').innerHTML = `
+    <button class="drawer-close" id="dw-close" aria-label="关闭">×</button>
+    <h2>争议对比</h2>
+    <div class="sub">同一场景取值相反的一对回答 · 对立度 ${edge?.opposition ?? '-'}</div>
+    <div class="cmp-card" data-open="${a.id}" role="button" tabindex="0">
+      <b>${a.name}</b>
+      <p>${STANCE_CN[a.stance]} · ${a.upvotes} 赞 · Q ${a.q.toFixed(2)}<br/>${a.gist}</p>
+    </div>
+    <div class="cmp-card foe" data-open="${b.id}" role="button" tabindex="0">
+      <b>${b.name}</b>
+      <p>${STANCE_CN[b.stance]} · ${b.upvotes} 赞 · Q ${b.q.toFixed(2)}<br/>${b.gist}</p>
+    </div>
+    <p class="empty-hint" style="margin-top:12px">点击任一侧卡片查看完整回答。</p>
+    ${disclaimer()}`;
+
+  $('#dw-close').addEventListener('click', closeDrawer);
+  $('#drawer-inner').querySelectorAll<HTMLElement>('[data-open]').forEach((el) => {
+    const go = () => openDrawer(el.dataset.open!);
+    el.addEventListener('click', go);
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') go();
+    });
+  });
+}
+
 function dimBar(label: string, v: number): string {
   const pct = Math.abs(v) * 50;
   const left = v >= 0 ? 50 : 50 - pct;
@@ -389,8 +457,24 @@ function dimBar(label: string, v: number): string {
 
 function closeDrawer(): void {
   $('#drawer').classList.remove('open');
-  window.setTimeout(() => chart.resize(), 340);
 }
+
+// Esc 优先关闭设置面板，其次关闭详情抽屉；点击抽屉外部同样关闭
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const mask = document.querySelector<HTMLElement>('#settings-mask');
+  if (mask && !mask.hidden) return;
+  if ($('#drawer').classList.contains('open')) closeDrawer();
+});
+
+document.addEventListener('click', (e) => {
+  const drawer = $('#drawer');
+  if (!drawer.classList.contains('open')) return;
+  if (drawer.contains(e.target as Node)) return;
+  // 条目点击会先打开新内容，同一拍内不当作「点击外部」
+  if (Date.now() - drawerOpenedAt < 200) return;
+  closeDrawer();
+});
 
 function disclaimer(): string {
   const live = data.meta.data_nature === 'live_zhihu';

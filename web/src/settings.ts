@@ -95,7 +95,7 @@ export function initSettings(onChange?: (c: LLMConfig) => void): void {
     const embOk = chatOk && !!c.emb;
 
     status.textContent = chatOk
-      ? `已配置 ${c.model}（Key ${mask(c.key)}）`
+      ? `已保存 ${c.model}（Key ${mask(c.key)}）· 仅本地重新建图时生效`
       : '未配置 —— 所有 LLM 能力降级回规则实现，管线不会中断';
     status.classList.toggle('on', chatOk);
     btn.classList.toggle('on', chatOk);
