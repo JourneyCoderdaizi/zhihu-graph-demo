@@ -50,6 +50,8 @@ export class GraphChart {
   private fitOnSettle = false;
   private dragMoved = 0;
   private suppressClickUntil = 0;
+  /** 拖拽节点或平移画布期间为 true：抑制 hover Focus 与 tooltip */
+  private pointerBusy = false;
 
   constructor(
     dom: HTMLElement,
@@ -70,6 +72,12 @@ export class GraphChart {
     this.chart.on('mousedown', (p: any) => {
       if (p.dataType === 'node' && p.data?.id) this.beginDrag(p.data.id, p.event);
     });
+    // 空白处按下 = 平移画布。ECharts roam 的 pan 与节点拖拽会争抢同一手势
+    //（画布反向跟动导致节点「粘手」），因此 roam 只留缩放，平移自己实现。
+    this.chart.getZr().on('mousedown', (e: any) => {
+      if (e.target) return;   // 落在节点/边上，交给 beginDrag / click
+      this.beginPan(e);
+    });
     // 双击释放钉住的节点，让它回到力学系统中
     this.chart.on('dblclick', (p: any) => {
       if (p.dataType !== 'node' || !p.data?.id) return;
@@ -83,6 +91,7 @@ export class GraphChart {
     // v2 Focus+Context：hover 时用后端预计算的二阶邻域做分级高亮
     // Focus 防抖：鼠标快速扫过时不触发，避免高频重绘造成闪烁
     this.chart.on('mouseover', (p: any) => {
+      if (this.pointerBusy) return;   // 拖拽/平移中不做 Focus，避免闪烁
       if (p.dataType !== 'node' || !p.data?.id) return;
       const id = p.data.id;
       window.clearTimeout(this.focusTimer);
@@ -91,6 +100,7 @@ export class GraphChart {
       this.focusTimer = window.setTimeout(() => this.applyFocus(id), FOCUS_ENTER_MS);
     });
     this.chart.on('mouseout', (p: any) => {
+      if (this.pointerBusy) return;
       if (p.dataType !== 'node') return;
       window.clearTimeout(this.focusTimer);
       window.clearTimeout(this.unfocusTimer);
@@ -333,7 +343,7 @@ export class GraphChart {
         // 布局由前端力导向模拟驱动（force.ts）：节点持续受力，
         // 拖拽/筛选/换题都会真实地加热重排，而非一次性静态排版。
         layout: 'none',
-        roam: true,
+        roam: 'scale',   // 只留滚轮缩放；平移由 beginPan 实现，与节点拖拽互不干扰
         draggable: false,   // 拖拽由自研 beginDrag 接管，避免双份处理
         ...keepView,
         data: nodes,
@@ -473,9 +483,10 @@ export class GraphChart {
     const n = this.simById.get(id);
     if (!n || !ev) return;
     this.dragMoved = 0;
+    this.pointerBusy = true;
     const dom = this.chart.getDom();
     dom.style.cursor = 'grabbing';
-    this.chart.setOption({ series: [{ roam: false }] });
+    this.chart.dispatchAction({ type: 'hideTip' });
 
     // 记录指针与节点中心的偏移，拖动时节点不跳变到指针正下方
     let offX = 0, offY = 0;
@@ -499,15 +510,63 @@ export class GraphChart {
       this.dragMoved++;
       n.fx = pt[0] + offX;
       n.fy = pt[1] + offY;
-      this.sim?.reheat(0.35);
+      // 拖动时温和加热即可，避免邻居被推得太猛显得「搅」
+      this.sim?.reheat(0.22);
     };
     const up = () => {
       window.removeEventListener('mousemove', move);
       window.removeEventListener('mouseup', up);
       dom.style.cursor = '';
-      this.chart.setOption({ series: [{ roam: true }] });
+      this.pointerBusy = false;
       if (this.dragMoved > 3) this.suppressClickUntil = Date.now() + 250;
-      this.sim?.reheat(0.2);
+      this.sim?.reheat(0.12);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  }
+
+  /** 空白处按下拖动 = 平移画布 */
+  private beginPan(ev: any): void {
+    const dom = this.chart.getDom();
+    const s0: any = (this.chart.getOption() as any)?.series?.[0] ?? {};
+    const c0: number[] = Array.isArray(s0.center) ? [...s0.center] : [0, 0];
+    const startX = ev.offsetX ?? 0, startY = ev.offsetY ?? 0;
+    // ECharts graph 的 View 存在基准倍率（像素/布局 ≈ 1.25 × zoom），
+    // 直接用 zoom 换算会少移 25% —— 画布「跟不上手」。实测比例最稳妥。
+    let scale = s0.zoom ?? 1;
+    try {
+      const a = this.chart.convertToPixel({ seriesIndex: 0 }, c0 as any) as any;
+      const b = this.chart.convertToPixel({ seriesIndex: 0 }, [c0[0] + 100, c0[1]] as any) as any;
+      if (a && b && isFinite(b[0] - a[0]) && b[0] !== a[0]) {
+        scale = (b[0] - a[0]) / 100;
+      }
+    } catch { /* 失败退回 zoom 近似 */ }
+    this.pointerBusy = true;
+    dom.style.cursor = 'grabbing';
+    this.chart.dispatchAction({ type: 'hideTip' });
+
+    const move = (e: MouseEvent) => {
+      const rect = dom.getBoundingClientRect();
+      const dx = (e.clientX - rect.left) - startX;
+      const dy = (e.clientY - rect.top) - startY;
+      this.chart.setOption({
+        animation: false,   // 平移必须逐帧跟手，不能带补间动画
+        series: [{ center: [c0[0] - dx / scale, c0[1] - dy / scale] }],
+      });
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      dom.style.cursor = '';
+      this.pointerBusy = false;
+      // 平移结束时模拟多半处于冷却态，这里把动画开关还原
+      this.chart.setOption({
+        animation: true,
+        animationDuration: 380,
+        animationEasing: 'cubicOut',
+        animationDurationUpdate: 380,
+        animationEasingUpdate: 'cubicInOut',
+      });
     };
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);

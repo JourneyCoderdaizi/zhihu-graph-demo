@@ -30,11 +30,11 @@ export interface SimLink {
 const REPULSION = 9200;      // 斥力系数（随距离平方衰减）
 const REPULSION_CUT = 380;   // 超过该距离忽略斥力，省算力
 const GRAVITY = 0.009;       // 向心系数（轻轻拉向布局原点，防止飞散）
-const FRICTION = 0.55;       // 速度保留率（越小越「黏」）
+const FRICTION = 0.72;       // 速度保留率（越大越「滑」，越小越「黏」）
 const ALPHA_DECAY = 0.032;
 const ALPHA_MIN = 0.012;
-const TARGET_DECAY = 0.985;  // 加热目标自然回落，拖拽结束慢慢冷却
-const MAX_VELOCITY = 6.5;
+const TARGET_DECAY = 0.97;   // 加热目标自然回落，拖拽结束较快冷却
+const MAX_VELOCITY = 9;
 const COLLIDE_PAD = 6;
 
 export class ForceSim {
